@@ -68,11 +68,12 @@ class DobotF710Jog:
         return (prev == 0 and cur == 1)
 
     def _apply_jog_params(self):
-        # Coordinate jog params: Vel/Acc for x,y,z,r
         dType.SetJOGCoordinateParams(
             self.api,
-            (self.speed_x, self.speed_y, self.speed_z, self.speed_r),
-            (self.acc_lin, self.acc_lin, self.acc_lin, self.acc_rot),
+            self.speed_x, self.acc_lin,
+            self.speed_y, self.acc_lin,
+            self.speed_z, self.acc_lin,
+            self.speed_r, self.acc_rot,
             isQueued=0
         )
 
@@ -109,14 +110,12 @@ class DobotF710Jog:
             rospy.loginfo("Jog speeds: vx=%.1f vy=%.1f vz=%.1f vr=%.1f",
                           self.speed_x, self.speed_y, self.speed_z, self.speed_r)
 
-    def _send_jog(self, mode, cmd):
-        # mode: dType.JOGMode.JOGCoordinate / JOGJoint etc.
-        # cmd:  dType.JOGCmd... (X+/X-/Y+/.../STOP)
-        key = (mode, cmd)
-        if key == self._last_jog:
+    def _send_jog(self, cmd):
+        # cmd is one of dType.JC.*
+        if cmd == self._last_jog:
             return
-        dType.SetJOGCmd(self.api, mode, cmd, isQueued=0)
-        self._last_jog = key
+        dType.SetJOGCmd(self.api, 0, cmd, isQueued=0)  # 0 => Cartesian JOG
+        self._last_jog = cmd
 
     def spin(self):
         rate = rospy.Rate(50)
@@ -134,8 +133,9 @@ class DobotF710Jog:
 
             if self._button_edge(6):  # back to start pose
                 # STOP jog first
-                self._send_jog(dType.JOGMode.JOGCoordinate, dType.JOGCmd.JOG_STOP)
+                self._send_jog(dType.JC.JogIdle)
                 x, y, z, r = map(float, self.start_pose)
+                self._send_jog(dType.JC.JogIdle)
                 dType.SetPTPCmd(self.api, dType.PTPMode.PTPMOVLXYZMode, x, y, z, r, isQueued=0)
 
             # Speed trim
@@ -153,7 +153,7 @@ class DobotF710Jog:
             mag, axis, sign = vals[0]
 
             if mag == 0.0:
-                self._send_jog(dType.JOGMode.JOGCoordinate, dType.JOGCmd.JOG_STOP)
+                self._send_jog(dType.JC.JogIdle)
             else:
                 if axis == "x":
                     cmd = dType.JOGCmd.JOG_X_POS if sign > 0 else dType.JOGCmd.JOG_X_NEG
