@@ -156,15 +156,15 @@ class DobotF710Jog:
                 self._send_jog(dType.JC.JogIdle)
             else:
                 if axis == "x":
-                    cmd = dType.JOGCmd.JOG_X_POS if sign > 0 else dType.JOGCmd.JOG_X_NEG
+                    cmd = dType.JC.JogAPPressed if sign > 0 else dType.JC.JogANPressed
                 elif axis == "y":
-                    cmd = dType.JOGCmd.JOG_Y_POS if sign > 0 else dType.JOGCmd.JOG_Y_NEG
+                    cmd = dType.JC.JogBPPressed if sign > 0 else dType.JC.JogBNPressed
                 elif axis == "z":
-                    cmd = dType.JOGCmd.JOG_Z_POS if sign > 0 else dType.JOGCmd.JOG_Z_NEG
+                    cmd = dType.JC.JogCPPressed if sign > 0 else dType.JC.JogCNPressed
                 else:  # r
-                    cmd = dType.JOGCmd.JOG_R_POS if sign > 0 else dType.JOGCmd.JOG_R_NEG
+                    cmd = dType.JC.JogDPPressed if sign > 0 else dType.JC.JogDNPressed
 
-                self._send_jog(dType.JOGMode.JOGCoordinate, cmd)
+                self._send_jog(cmd)
 
             self._last_buttons = list(self._joy.buttons)
             rate.sleep()
