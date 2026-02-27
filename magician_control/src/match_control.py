@@ -38,6 +38,10 @@ class DobotF710Jog:
         self._last_jog = None  # (mode, cmd) to avoid re-sending
         self.vacuum_on = False
 
+        # in __init__
+        self.suck_on = False
+        self.grip_on = False
+
         # --- Dobot connect ---
         self.api = dType.load()
         port = "/dev/ttyACM0"  # oder /dev/serial/by-id/...
@@ -133,6 +137,14 @@ class DobotF710Jog:
         dType.SetJOGCmd(self.api, 0, cmd, isQueued=0)  # 0 => Cartesian JOG
         self._last_jog = cmd
 
+    def _set_suck(self, on: bool):
+        dType.SetEndEffectorSuctionCup(self.api, True, bool(on), isQueued=0)
+        self.suck_on = bool(on)
+
+    def _set_grip(self, on: bool):
+        dType.SetEndEffectorGripper(self.api, True, bool(on), isQueued=0)
+        self.grip_on = bool(on)
+
     def spin(self):
         rate = rospy.Rate(50)
 
@@ -142,17 +154,21 @@ class DobotF710Jog:
                 continue
 
             # Buttons
-            if self._button_edge(2):  # X toggles suction
-                self.vacuum_on = not self.vacuum_on
-                dType.SetEndEffectorSuctionCup(self.api, self.vacuum_on, True, isQueued=0)
-                rospy.loginfo("Vacuum: %s", "ON" if self.vacuum_on else "OFF")
+            # in spin(): Buttons[2]=X, Buttons[0]=A
 
-            if self._button_edge(6):  # back to start pose
-                # STOP jog first
-                self._send_jog(dType.JC.JogIdle)
-                x, y, z, r = map(float, self.start_pose)
-                self._send_jog(dType.JC.JogIdle)
-                dType.SetPTPCmd(self.api, dType.PTPMode.PTPMOVLXYZMode, x, y, z, r, isQueued=0)
+            # X toggles suction; disables gripper
+            if self._button_edge(2):
+                new = not self.suck_on
+                if new:
+                    self._set_grip(False)
+                self._set_suck(new)
+
+            # A toggles gripper; disables suction
+            if self._button_edge(0):
+                new = not self.grip_on
+                if new:
+                    self._set_suck(False)
+                self._set_grip(new)
 
             # Speed trim
             self._trim_speeds()
