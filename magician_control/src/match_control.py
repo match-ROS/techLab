@@ -24,6 +24,11 @@ class DobotF710Jog:
         self.speed_min = float(rospy.get_param("~speed_min", 5.0))
         self.speed_max = float(rospy.get_param("~speed_max", 200.0))
 
+        self.conveyor_index = int(rospy.get_param("~conveyor_index", 0))
+        self.conveyor_max_speed = int(rospy.get_param("~conveyor_max_speed", 8000))  # Puls/s (typisch), ggf. anpassen
+        self.conveyor_dead = float(rospy.get_param("~conveyor_dead", 0.05))
+        self._last_conveyor_speed = 0.0
+
         self.start_pose = rospy.get_param("~start_pose", [200.0, 0.0, 0.0, 0.0])
 
         self._last_trim_t = 0.0
@@ -178,6 +183,31 @@ class DobotF710Jog:
                 self._send_jog(cmd)
 
             self._last_buttons = list(self._joy.buttons)
+
+            #Förderband
+            # Triggers: unpressed=+1, pressed=-1
+            lt = self._axis(2, 1.0)  # left trigger
+            rt = self._axis(5, 1.0)  # right trigger
+
+            lt_strength = max(0.0, (1.0 - lt) / 2.0)  # 0..1
+            rt_strength = max(0.0, (1.0 - rt) / 2.0)
+
+            # decide direction
+            cmd_strength = rt_strength - lt_strength   # + forward, - reverse
+            if abs(cmd_strength) < self.conveyor_dead:
+                speed = 0
+            else:
+                speed = int(cmd_strength * self.conveyor_max_speed)
+
+            # send only if changed
+            if speed != self._last_conveyor_speed:
+                if speed == 0:
+                    dType.SetEMotor(self.api, self.conveyor_index, 0, 0, isQueued=0)  # disable
+                else:
+                    dType.SetEMotor(self.api, self.conveyor_index, 1, speed, isQueued=0)  # enable + speed (sign = direction)
+                self._last_conveyor_speed = speed
+
+
             rate.sleep()
 
 def main():
