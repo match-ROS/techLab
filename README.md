@@ -61,6 +61,33 @@ Code für das Techlab
     cd src/
     sudo apt install git
     sudo apt-get install python3-catkin-tools
-
+    sudo apt install ros-one-joy
+    sudo apt update
+    sudo apt install libqt5serialport5
     git clone https://github.com/match-ROS/techLab
+    cd ..
+    catkin build
+    ```
+
+4. Autostart einrichten
+    ```
+    cd 
+    mkdir bin
+    cd bin
+    nano start_dobot_teleop.sh
+    ```
+    code aus start_dobot_teleop.sh (oder ganze Datei) kopieren. Datei speichern und
+    ```
+    chmod +x start_dobot_teleop.sh 
+    ```
+
+    dann 
+    ```
+    nano ~/.config/systemd/user/dobot-teleop.service
+    ```
+    code auf dobot-teleop.service kopieren.
+    speichern und ausführen:.
+     ```
+    systemctl --user daemon-reload
+    systemctl --user enable --now dobot-teleop.service
     ```
