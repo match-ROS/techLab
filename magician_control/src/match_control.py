@@ -40,6 +40,17 @@ class DobotF710Jog:
         if state != dType.DobotConnect.DobotConnect_NoError:
             raise RuntimeError(f"ConnectDobot failed: {state}")
 
+        # optional: arm orientation (0=Lefty, 1=Righty) – nur setzen wenn du sicher bist
+        # dType.SetArmOrientation(self.api, dType.ArmOrientation.LeftyArmOrientation, isQueued=0)
+
+        # HOME params (deine gewünschte Referenzpose)
+        dType.SetHOMEParams(self.api,
+                            self.start_pose[0], self.start_pose[1], self.start_pose[2], self.start_pose[3],
+                            isQueued=0)
+
+        # Referenzfahrt / Homing (blockierend, bis fertig)
+        dType.SetHOMECmdEx(self.api, temp=0.0, isQueued=0)
+
         # smoother jog behavior
         self._apply_jog_params()
 
