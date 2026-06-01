@@ -10,8 +10,8 @@
   </node>
 
   <node name="arduino_joint_knob_control" pkg="magician_control" type="arduino_joint_knob_control.py" output="screen">
-    <param name="step_deg" value="1.0"/>
-    <param name="publish_rate" value="20.0"/>
+    <param name="step_deg" value="0.25"/>
+    <param name="publish_rate" value="50.0"/>
     <rosparam param="device_joint_map">{P1: 0, P2: 1, P3: 2, P4: 3}</rosparam>
     <!-- Optional: set exact Arduino ports here if auto-discovery misses them. -->
     <!-- <rosparam param="ports">[/dev/serial/by-id/usb-...-if00]</rosparam> -->

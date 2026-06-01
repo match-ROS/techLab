@@ -8,17 +8,19 @@ import rospy
 import serial
 from serial.tools import list_ports
 from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import String
 
 
 ENCODER_RE = re.compile(r"^(?P<device>[^:]+):ENC:(?P<delta>[-+]?\d+)\s*$")
+BUTTON_RE = re.compile(r"^(?P<device>[^:]+):BTN:(?P<state>[01])\s*$")
 
 
 class ArduinoJointKnobControl:
     def __init__(self):
         self.baudrate = int(rospy.get_param("~baudrate", 115200))
         self.serial_timeout = float(rospy.get_param("~serial_timeout", 0.05))
-        self.publish_rate = float(rospy.get_param("~publish_rate", 20.0))
-        self.step_deg = float(rospy.get_param("~step_deg", 1.0))
+        self.publish_rate = float(rospy.get_param("~publish_rate", 50.0))
+        self.step_deg = float(rospy.get_param("~step_deg", 0.25))
         self.joint_count = int(rospy.get_param("~joint_count", 4))
         self.port_keywords = rospy.get_param("~port_keywords", [
             "arduino",
@@ -43,6 +45,7 @@ class ArduinoJointKnobControl:
         self._threads = []
 
         self.pub = rospy.Publisher("/joint_angle_delta", Float64MultiArray, queue_size=5)
+        self.button_pub = rospy.Publisher("/joint_knob_button", String, queue_size=5)
 
     def _discover_ports(self):
         if self.ports:
@@ -78,11 +81,21 @@ class ArduinoJointKnobControl:
 
     def _handle_line(self, line, port):
         match = ENCODER_RE.match(line)
-        if not match:
-            if line.endswith(":READY") or line.endswith(":BOOT"):
-                rospy.loginfo("Arduino knob %s on %s", line, port)
+        if match:
+            self._handle_encoder(match, port)
             return
 
+        match = BUTTON_RE.match(line)
+        if match:
+            device_id = match.group("device")
+            if match.group("state") == "1":
+                self.button_pub.publish(String(data=device_id))
+            return
+
+        if line.endswith(":READY") or line.endswith(":BOOT"):
+            rospy.loginfo("Arduino knob %s on %s", line, port)
+
+    def _handle_encoder(self, match, port):
         device_id = match.group("device")
         if device_id not in self.device_joint_map:
             rospy.logwarn_throttle(5.0, "Ignoring unknown knob id %s from %s", device_id, port)
