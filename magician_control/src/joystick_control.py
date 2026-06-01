@@ -7,6 +7,7 @@
 import rospy
 from sensor_msgs.msg import Joy
 from geometry_msgs.msg import Twist
+from std_msgs.msg import Float64MultiArray
 
 initialCoordinates = [202, 0, 0, 0]
 prev_x, prev_y, prev_z, prev_r = initialCoordinates
@@ -15,6 +16,8 @@ vacuumPumpOn = 0
 settingsUpdated = False
 button_timeout = 0.5
 change_timeout = 0.07
+knob_active_until = 0.0
+input_lockout_s = 2.0
 
 prevTwist = Twist()
 twist = Twist()
@@ -46,6 +49,10 @@ def publish_coord_cmd():
 def joystick_callback(data):
     global prev_x, prev_y, prev_z, prev_r, twist, vacuumPumpOn, settingsUpdated
     global button_start_time, button_timeout
+
+    if rospy.get_time() < knob_active_until:
+        settingsUpdated = False
+        return
 
     x = data.axes[4]  # Horizontal movement (x-coordinate)
     y = data.axes[3]  # Vertical movement (y-coordinate)
@@ -106,6 +113,11 @@ def coord_callback(data):
     prev_z = data.linear.z
     prev_r = data.angular.z
 
+
+def joint_delta_callback(_data):
+    global knob_active_until
+    knob_active_until = rospy.get_time() + input_lockout_s
+
 if __name__ == '__main__':
     global pub
     global sensitivity
@@ -113,10 +125,12 @@ if __name__ == '__main__':
     global change_start_time
     rospy.init_node('joystick_control_node')
     sensitivity = rospy.get_param('~sensitivity', 0.5)
+    input_lockout_s = float(rospy.get_param("~input_lockout_s", 2.0))
 
     pub = rospy.Publisher('/end_effector_coord', Twist, queue_size=1)
     change_start_time = rospy.get_time()
     rospy.Subscriber('/end_effector_coord', Twist, coord_callback)
+    rospy.Subscriber('/joint_angle_delta', Float64MultiArray, joint_delta_callback, queue_size=10)
 
     button_start_time = rospy.get_time()
     rospy.Subscriber('/joy', Joy, joystick_callback) #rosrun joy joy_node _dev:=/dev/input/js0 _autorepeat_rate:=15
@@ -124,4 +138,3 @@ if __name__ == '__main__':
 
     # block until the node is shutdown
     rospy.spin()
-
