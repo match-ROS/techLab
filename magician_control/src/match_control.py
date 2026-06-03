@@ -26,13 +26,19 @@ class DobotF710Jog:
         self.speed_min = float(rospy.get_param("~speed_min", 5.0))
         self.speed_max = float(rospy.get_param("~speed_max", 200.0))
         self.input_lockout_s = float(rospy.get_param("~input_lockout_s", 2.0))
+        self.knob_control_mode = str(rospy.get_param("~knob_control_mode", "jog"))
         self.joint_command_interval_s = float(rospy.get_param("~joint_command_interval_s", 0.05))
-        self.joint_slow_velocity = float(rospy.get_param("~joint_slow_velocity", 40.0))
-        self.joint_fast_velocity = float(rospy.get_param("~joint_fast_velocity", 200.0))
+        self.joint_slow_velocity = float(rospy.get_param("~joint_slow_velocity", 20.0))
+        self.joint_fast_velocity = float(rospy.get_param("~joint_fast_velocity", 100.0))
         self.joint_fast_delta = float(rospy.get_param("~joint_fast_delta", 8.0))
         self.joint_acceleration = float(rospy.get_param("~joint_acceleration", 300.0))
         self.joint_min_deg = rospy.get_param("~joint_min_deg", [-135.0, -5.0, -10.0, -145.0])
         self.joint_max_deg = rospy.get_param("~joint_max_deg", [135.0, 85.0, 95.0, 145.0])
+        self.joint_jog_min_knob_rate = float(rospy.get_param("~joint_jog_min_knob_rate", 1.0))
+        self.joint_jog_max_knob_rate = float(rospy.get_param("~joint_jog_max_knob_rate", 35.0))
+        self.joint_jog_timeout_s = float(rospy.get_param("~joint_jog_timeout_s", 0.16))
+        self.joint_jog_switch_interval_s = float(rospy.get_param("~joint_jog_switch_interval_s", 0.04))
+        self.joint_jog_velocity_update_min_s = float(rospy.get_param("~joint_jog_velocity_update_min_s", 0.04))
         self.gripper_knob_id = str(rospy.get_param("~gripper_knob_id", "P4"))
         self.knob_button_debounce_s = float(rospy.get_param("~knob_button_debounce_s", 0.4))
 
@@ -51,6 +57,11 @@ class DobotF710Jog:
         self._last_joint_cmd_t = 0.0
         self._pending_since_t = None
         self._last_ptp_velocity = None
+        self._joint_jog_velocity = [0.0, 0.0, 0.0, 0.0]
+        self._last_joint_delta_t = [0.0, 0.0, 0.0, 0.0]
+        self._last_joint_jog_switch_t = 0.0
+        self._last_joint_jog_param_t = 0.0
+        self._joint_jog_rr_index = 0
         self._last_knob_button_t = 0.0
         self._active_source = None
         self._source_lock_until = 0.0
@@ -105,7 +116,25 @@ class DobotF710Jog:
         if self._pending_since_t is None:
             self._pending_since_t = time.time()
         for i in range(4):
-            self._pending_joint_delta[i] += float(msg.data[i])
+            delta = float(msg.data[i])
+            self._pending_joint_delta[i] += delta
+            if delta != 0.0:
+                self._update_joint_jog_velocity(i, delta)
+
+    def _update_joint_jog_velocity(self, joint_index, delta):
+        now = time.time()
+        previous_t = self._last_joint_delta_t[joint_index]
+        dt = max(now - previous_t, self.joint_jog_velocity_update_min_s) if previous_t > 0.0 else self.joint_jog_velocity_update_min_s
+        knob_rate = abs(delta) / dt
+        scale = self._clamp(
+            (knob_rate - self.joint_jog_min_knob_rate) /
+            max(self.joint_jog_max_knob_rate - self.joint_jog_min_knob_rate, 0.001),
+            0.0,
+            1.0
+        )
+        velocity = self.joint_slow_velocity + scale * (self.joint_fast_velocity - self.joint_slow_velocity)
+        self._joint_jog_velocity[joint_index] = velocity if delta > 0.0 else -velocity
+        self._last_joint_delta_t[joint_index] = now
 
     def _knob_button_cb(self, msg: String):
         device_id = msg.data.strip()
@@ -121,11 +150,9 @@ class DobotF710Jog:
             rospy.loginfo_throttle(1.0, "Ignoring knob button while joystick input is active.")
             return
 
-        new = not self.grip_on
-        if new:
-            self._set_suck(False)
-        self._set_grip(new)
-        rospy.loginfo("Knob %s toggled gripper: %s", device_id, "on" if new else "off")
+        new = not self.suck_on
+        self._set_suck(new)
+        rospy.loginfo("Knob %s toggled suction pump: %s", device_id, "on" if new else "off")
 
     def _accept_source(self, source):
         now = time.time()
@@ -226,12 +253,13 @@ class DobotF710Jog:
             rospy.loginfo("Jog speeds: vx=%.1f vy=%.1f vz=%.1f vr=%.1f",
                           self.speed_x, self.speed_y, self.speed_z, self.speed_r)
 
-    def _send_jog(self, cmd):
+    def _send_jog(self, cmd, is_joint=0):
         # cmd is one of dType.JC.*
-        if cmd == self._last_jog:
+        jog = (int(is_joint), cmd)
+        if jog == self._last_jog:
             return
-        dType.SetJOGCmd(self.api, 0, cmd, isQueued=0)  # 0 => Cartesian JOG
-        self._last_jog = cmd
+        dType.SetJOGCmd(self.api, int(is_joint), cmd, isQueued=0)
+        self._last_jog = jog
 
     def _get_joint_angles(self):
         pose = dType.GetPose(self.api)
@@ -283,6 +311,53 @@ class DobotF710Jog:
         self._send_joint_target(self._target_joint_angles)
         return True
 
+    def _consume_joint_jog(self):
+        now = time.time()
+        active = []
+        for i, last_t in enumerate(self._last_joint_delta_t):
+            if last_t > 0.0 and (now - last_t) <= self.joint_jog_timeout_s:
+                active.append(i)
+            else:
+                self._joint_jog_velocity[i] = 0.0
+
+        if not active:
+            if self._last_jog is not None and self._last_jog[0] == 1:
+                self._send_jog(dType.JC.JogIdle, is_joint=1)
+            return False
+
+        if (now - self._last_joint_jog_param_t) >= self.joint_jog_velocity_update_min_s:
+            speeds = [abs(v) for v in self._joint_jog_velocity]
+            dType.SetJOGJointParams(
+                self.api,
+                speeds[0], self.joint_acceleration,
+                speeds[1], self.joint_acceleration,
+                speeds[2], self.joint_acceleration,
+                speeds[3], self.joint_acceleration,
+                isQueued=0
+            )
+            self._last_joint_jog_param_t = now
+
+        if (now - self._last_joint_jog_switch_t) >= self.joint_jog_switch_interval_s:
+            self._joint_jog_rr_index = (self._joint_jog_rr_index + 1) % len(active)
+            self._last_joint_jog_switch_t = now
+
+        joint_index = active[self._joint_jog_rr_index % len(active)]
+        positive_cmds = [dType.JC.JogAPPressed, dType.JC.JogBPPressed, dType.JC.JogCPPressed, dType.JC.JogDPPressed]
+        negative_cmds = [dType.JC.JogANPressed, dType.JC.JogBNPressed, dType.JC.JogCNPressed, dType.JC.JogDNPressed]
+        cmd = positive_cmds[joint_index] if self._joint_jog_velocity[joint_index] > 0.0 else negative_cmds[joint_index]
+        self._send_jog(cmd, is_joint=1)
+        rospy.loginfo_throttle(
+            0.5,
+            "Joint JOG active velocities (deg/s): %s",
+            [round(v, 1) for v in self._joint_jog_velocity]
+        )
+        return True
+
+    def _consume_joint_control(self):
+        if self.knob_control_mode == "jog":
+            return self._consume_joint_jog()
+        return self._consume_joint_deltas()
+
     def _set_suck(self, on: bool):
         dType.SetEndEffectorSuctionCup(self.api, True, bool(on), isQueued=0)
         self.suck_on = bool(on)
@@ -299,7 +374,7 @@ class DobotF710Jog:
                 rate.sleep()
                 continue
 
-            if self._consume_joint_deltas():
+            if self._consume_joint_control():
                 self._last_buttons = list(self._joy.buttons)
                 rate.sleep()
                 continue
