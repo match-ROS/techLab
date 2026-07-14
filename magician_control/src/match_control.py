@@ -45,6 +45,13 @@ class DobotF710Jog:
         self.conveyor_index = int(rospy.get_param("~conveyor_index", 0))
         self.conveyor_max_speed = int(rospy.get_param("~conveyor_max_speed", 8000))  # Puls/s (typisch), ggf. anpassen
         self.conveyor_dead = float(rospy.get_param("~conveyor_dead", 0.05))
+        self.conveyor_knob_step = float(rospy.get_param("~conveyor_knob_step", 0.1))
+        self.conveyor_negative_knob_id = str(rospy.get_param("~conveyor_negative_knob_id", "P1"))
+        self.conveyor_positive_knob_id = str(rospy.get_param("~conveyor_positive_knob_id", "P2"))
+        self.conveyor_stop_knob_id = str(rospy.get_param("~conveyor_stop_knob_id", "P3"))
+        self._conveyor_cmd = 0.0
+        self._conveyor_resume_cmd = 0.0
+        self._conveyor_source = None
         self._last_conveyor_speed = 0.0
 
         self.start_pose = rospy.get_param("~start_pose", [200.0, 0.0, 0.0, 0.0])
@@ -62,7 +69,7 @@ class DobotF710Jog:
         self._last_joint_jog_switch_t = 0.0
         self._last_joint_jog_param_t = 0.0
         self._joint_jog_rr_index = 0
-        self._last_knob_button_t = 0.0
+        self._last_knob_button_t = {}
         self._active_source = None
         self._source_lock_until = 0.0
 
@@ -138,21 +145,29 @@ class DobotF710Jog:
 
     def _knob_button_cb(self, msg: String):
         device_id = msg.data.strip()
-        if device_id != self.gripper_knob_id:
-            return
 
         now = time.time()
-        if (now - self._last_knob_button_t) < self.knob_button_debounce_s:
+        if (now - self._last_knob_button_t.get(device_id, 0.0)) < self.knob_button_debounce_s:
             return
-        self._last_knob_button_t = now
+        self._last_knob_button_t[device_id] = now
 
         if not self._accept_source("knob"):
             rospy.loginfo_throttle(1.0, "Ignoring knob button while joystick input is active.")
             return
 
-        new = not self.suck_on
-        self._set_suck(new)
-        rospy.loginfo("Knob %s toggled suction pump: %s", device_id, "on" if new else "off")
+        if device_id == self.conveyor_negative_knob_id:
+            self._set_conveyor_normalized(self._conveyor_cmd - self.conveyor_knob_step, "knob")
+        elif device_id == self.conveyor_positive_knob_id:
+            self._set_conveyor_normalized(self._conveyor_cmd + self.conveyor_knob_step, "knob")
+        elif device_id == self.conveyor_stop_knob_id:
+            if abs(self._conveyor_cmd) >= self.conveyor_dead:
+                self._set_conveyor_normalized(0.0, "knob", remember=False)
+            elif abs(self._conveyor_resume_cmd) >= self.conveyor_dead:
+                self._set_conveyor_normalized(self._conveyor_resume_cmd, "knob")
+        elif device_id == self.gripper_knob_id:
+            new = not self.suck_on
+            self._set_suck(new)
+            rospy.loginfo("Knob %s toggled suction pump: %s", device_id, "on" if new else "off")
 
     def _accept_source(self, source):
         now = time.time()
@@ -366,6 +381,26 @@ class DobotF710Jog:
         dType.SetEndEffectorGripper(self.api, True, bool(on), isQueued=0)
         self.grip_on = bool(on)
 
+    def _set_conveyor_normalized(self, value, source, remember=True):
+        self._conveyor_cmd = self._clamp(float(value), -1.0, 1.0)
+        if remember and abs(self._conveyor_cmd) >= self.conveyor_dead:
+            self._conveyor_resume_cmd = self._conveyor_cmd
+
+        # The motor's physical direction is opposite to the normalized command convention.
+        speed = int(round(-self._conveyor_cmd * self.conveyor_max_speed))
+        if speed == self._last_conveyor_speed:
+            self._conveyor_source = source
+            return
+
+        if speed == 0:
+            dType.SetEMotor(self.api, self.conveyor_index, 0, 0, isQueued=0)
+        else:
+            dType.SetEMotor(self.api, self.conveyor_index, 1, speed, isQueued=0)
+
+        self._last_conveyor_speed = speed
+        self._conveyor_source = source
+        rospy.loginfo("Conveyor speed: v=%.1f speed=%d source=%s", self._conveyor_cmd, speed, source)
+
     def spin(self):
         rate = rospy.Rate(50)
 
@@ -444,18 +479,10 @@ class DobotF710Jog:
 
             # decide direction
             cmd_strength = rt_strength - lt_strength   # + forward, - reverse
-            if abs(cmd_strength) < self.conveyor_dead:
-                speed = 0
-            else:
-                speed = int(cmd_strength * self.conveyor_max_speed)
-
-            # send only if changed
-            if speed != self._last_conveyor_speed:
-                if speed == 0:
-                    dType.SetEMotor(self.api, self.conveyor_index, 0, 0, isQueued=0)  # disable
-                else:
-                    dType.SetEMotor(self.api, self.conveyor_index, 1, speed, isQueued=0)  # enable + speed (sign = direction)
-                self._last_conveyor_speed = speed
+            if abs(cmd_strength) >= self.conveyor_dead:
+                self._set_conveyor_normalized(cmd_strength, "joystick")
+            elif self._conveyor_source == "joystick" and self._last_conveyor_speed != 0:
+                self._set_conveyor_normalized(0.0, "joystick")
 
 
             rate.sleep()
