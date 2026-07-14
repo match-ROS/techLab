@@ -20,6 +20,12 @@ class DobotF710Jog:
         self.speed_r = float(rospy.get_param("~speed_r", 30.0))   # deg/s
         self.acc_lin = float(rospy.get_param("~acc_lin", 100.0))  # mm/s^2
         self.acc_rot = float(rospy.get_param("~acc_rot", 100.0))  # deg/s^2
+        self.xy_axis_x = int(rospy.get_param("~xy_axis_x", 0))
+        self.xy_axis_y = int(rospy.get_param("~xy_axis_y", 1))
+        self.xy_map = [float(v) for v in rospy.get_param("~xy_map", [1.0, 0.0, 0.0, 1.0])]
+        if len(self.xy_map) != 4:
+            rospy.logwarn("Invalid ~xy_map length %d; using identity mapping.", len(self.xy_map))
+            self.xy_map = [1.0, 0.0, 0.0, 1.0]
 
         self.trim_step = float(rospy.get_param("~trim_step", 5.0))
         self.trim_debounce_s = float(rospy.get_param("~trim_debounce_s", 0.2))
@@ -197,6 +203,14 @@ class DobotF710Jog:
             return default
         v = float(self._joy.axes[idx])
         return 0.0 if abs(v) < self.deadzone else v
+
+    def _xy_axes(self):
+        joy_x = self._axis(self.xy_axis_x, 0.0)
+        joy_y = self._axis(self.xy_axis_y, 0.0)
+        return (
+            self.xy_map[0] * joy_x + self.xy_map[1] * joy_y,
+            self.xy_map[2] * joy_x + self.xy_map[3] * joy_y,
+        )
 
     def _button_edge(self, idx):
         if self._joy is None or idx >= len(self._joy.buttons):
@@ -442,9 +456,7 @@ class DobotF710Jog:
             # Speed trim
             self._trim_speeds()
 
-            # Axes mapping (your mapping)
-            y = self._axis(0, 0.0)  # y
-            x = self._axis(1, 0.0)  # x
+            x, y = self._xy_axes()
             z = self._axis(4, 0.0)  # z
             r = self._axis(3, 0.0)  # rot z
 

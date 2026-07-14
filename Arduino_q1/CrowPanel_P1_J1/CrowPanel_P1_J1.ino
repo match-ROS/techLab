@@ -5,7 +5,9 @@
 
 // ---- Knob-Auswahl ----
 // Nur diesen Wert aendern: 1 = P1/Achse 1, 2 = P2/Achse 2, 3 = P3/Achse 3
+#ifndef KNOB_ID
 #define KNOB_ID 1
+#endif
 
 #if (KNOB_ID < 1) || (KNOB_ID > 3)
 #error "KNOB_ID muss aktuell 1, 2 oder 3 sein."
@@ -42,7 +44,7 @@ Arduino_ESP32SPI *bus = new Arduino_ESP32SPI(
 );
 Arduino_GFX *gfx = new Arduino_GC9A01(bus, TFT_RES, 0, true);
 
-// ---- Encoder-State + Beschleunigung ----
+// ---- Encoder-State ----
 volatile int enc_old_state = -1;
 volatile long enc_delta_raw = 0;
 volatile bool btn_pressed = false;
@@ -69,18 +71,10 @@ void IRAM_ATTR button_irq() {
   if (!digitalRead(ENCODER_BTN)) btn_pressed = true; // active LOW
 }
 
-// ===== Beschleunigungslogik =====
 long apply_acceleration(long delta, unsigned long dt_us)
 {
-  if (delta == 0) return 0;
-
-  int factor = 1;
-  if (dt_us > 0) {
-    if (dt_us < 5000) factor = 5;
-    else if (dt_us < 15000) factor = 3;
-    else if (dt_us < 40000) factor = 2;
-  }
-  return delta * factor;
+  (void)dt_us;
+  return delta;
 }
 
 void drawKnobIcon() {

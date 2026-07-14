@@ -21,6 +21,7 @@ class ArduinoJointKnobControl:
         self.serial_timeout = float(rospy.get_param("~serial_timeout", 0.05))
         self.publish_rate = float(rospy.get_param("~publish_rate", 50.0))
         self.step_deg = float(rospy.get_param("~step_deg", 0.25))
+        self.max_delta_per_event = int(rospy.get_param("~max_delta_per_event", 1))
         self.joint_count = int(rospy.get_param("~joint_count", 4))
         self.port_keywords = rospy.get_param("~port_keywords", [
             "arduino",
@@ -106,9 +107,21 @@ class ArduinoJointKnobControl:
             rospy.logwarn_throttle(5.0, "Ignoring knob id %s with invalid joint index %d", device_id, joint_index)
             return
 
-        delta_deg = int(match.group("delta")) * self.step_deg
+        delta_steps = int(match.group("delta"))
+        if self.max_delta_per_event > 0:
+            delta_steps = self._clamp(
+                delta_steps,
+                -self.max_delta_per_event,
+                self.max_delta_per_event,
+            )
+
+        delta_deg = delta_steps * self.step_deg
         with self._lock:
             self._pending_delta_deg[joint_index] += delta_deg
+
+    @staticmethod
+    def _clamp(v, lo, hi):
+        return max(lo, min(hi, v))
 
     def start(self):
         ports = self._discover_ports()
